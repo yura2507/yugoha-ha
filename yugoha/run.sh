@@ -8,4 +8,16 @@ mkdir -p /data
 # discovery and restart Core only when the integration version changed.
 /opt/yugoha-venv/bin/python /app/bootstrap.py || true
 
-exec /opt/yugoha-venv/bin/gunicorn   --bind 0.0.0.0:8099   --workers 1   --threads 8   --timeout 60   --access-logfile -   --error-logfile -   app:app   --chdir /app
+# Message ids must stay unique even when yuGoHA Server is reinstalled or moved
+# to another Home Assistant App instance. Android uses id as the SQLite key.
+/opt/yugoha-venv/bin/python /app/id_migration.py || true
+
+exec /opt/yugoha-venv/bin/gunicorn \
+  --bind 0.0.0.0:8099 \
+  --workers 1 \
+  --threads 8 \
+  --timeout 60 \
+  --access-logfile - \
+  --error-logfile - \
+  app:app \
+  --chdir /app
