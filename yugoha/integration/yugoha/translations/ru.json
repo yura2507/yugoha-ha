@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Подключение yuGoHA Server",
+        "description": "Укажите локальный адрес App и API key из его Web UI.",
+        "data": {
+          "url": "Адрес yuGoHA Server",
+          "api_key": "API key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Не удалось подключиться к yuGoHA Server"
+    },
+    "abort": {
+      "already_configured": "yuGoHA Server уже настроен"
+    }
+  }
+}

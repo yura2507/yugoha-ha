@@ -1,0 +1,9 @@
+{
+  "domain": "yugoha",
+  "name": "yuGoHA",
+  "version": "0.4.0",
+  "config_flow": true,
+  "iot_class": "local_push",
+  "requirements": [],
+  "documentation": "https://github.com/yura2507/yugoha-ha"
+}

@@ -1,0 +1,38 @@
+name: "yuGoHA"
+version: "0.4.0"
+slug: "yugoha"
+description: "yuGoHA: локальный сервер уведомлений, WebSocket/FCM и автоматическая установка интеграции Home Assistant"
+url: "https://github.com/yura2507/yugoha-ha"
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+init: false
+
+ingress: true
+ingress_port: 8099
+panel_icon: "mdi:message-badge"
+panel_title: "yuGoHA"
+panel_admin: true
+
+ports:
+  8099/tcp: 8098
+ports_description:
+  8099/tcp: "yuGoHA API для Android и локальной синхронизации"
+
+# Нужен только для автоматической установки custom integration.
+map:
+  - type: homeassistant_config
+    read_only: false
+
+# Доступ к Supervisor нужен для discovery и однократного restart Core
+# после установки/обновления integration.
+hassio_api: true
+hassio_role: homeassistant
+homeassistant_api: true
+
+options:
+  api_key: ""
+schema:
+  api_key: "password?"

@@ -1,0 +1,5 @@
+DOMAIN = "yugoha"
+CONF_URL = "url"
+CONF_API_KEY = "api_key"
+DEFAULT_URL = "http://homeassistant.local:8098"
+SERVICE_SEND = "send"

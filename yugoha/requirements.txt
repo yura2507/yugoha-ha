@@ -1,0 +1,5 @@
+Flask>=3.1,<4
+gunicorn>=23,<24
+firebase-admin>=7,<8
+flask-sock>=0.7,<1
+simple-websocket>=1.1,<2

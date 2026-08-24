@@ -1,0 +1,24 @@
+send:
+  name: Отправить сообщение
+  description: Отправляет сообщение через yuGoHA Server 0.3.
+  fields:
+    message:
+      name: Сообщение
+      required: true
+      example: "2.warning. Давление воды ниже нормы"
+      selector:
+        text:
+          multiline: true
+    title:
+      name: Заголовок
+      default: "Home Assistant"
+      selector:
+        text:
+    priority:
+      name: Приоритет
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 10
+          mode: slider
