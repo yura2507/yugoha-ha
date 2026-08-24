@@ -1,6 +1,6 @@
 send:
   name: Отправить сообщение
-  description: Отправляет сообщение через yuGoHA Server 0.3.
+  description: Отправляет сообщение через yuGoHA Server.
   fields:
     message:
       name: Сообщение
