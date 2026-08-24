@@ -1,5 +1,5 @@
 name: "yuGoHA"
-version: "0.4.4"
+version: "0.4.5"
 slug: "yugoha"
 description: "yuGoHA: локальный сервер уведомлений, WebSocket/FCM и автоматическая установка интеграции Home Assistant. Важно: после первого запуска Home Assistant Core автоматически перезапустится один раз."
 url: "https://github.com/yura2507/yugoha-ha"
