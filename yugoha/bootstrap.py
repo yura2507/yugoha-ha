@@ -9,11 +9,12 @@ from pathlib import Path
 INTEGRATION_SRC = Path("/app/integration/yugoha")
 INTEGRATION_DST = Path("/homeassistant/custom_components/yugoha")
 STATE = Path("/data/bootstrap.json")
+SERVER_STATE = Path("/data/state.json")
 OPTIONS = Path("/data/options.json")
 SUPERVISOR = "http://supervisor"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 
 
 def log(msg):
@@ -88,6 +89,18 @@ def install_integration():
     return True
 
 
+def current_api_key():
+    # app.py generates and persists the real API key in /data/state.json.
+    # /data/options.json is allowed to stay empty, so discovery must use state.json first.
+    server_state = read_json(SERVER_STATE, {})
+    key = str(server_state.get("api_key", "") or "").strip()
+    if key:
+        return key
+
+    options = read_json(OPTIONS, {})
+    return str(options.get("api_key", "") or "").strip()
+
+
 def register_discovery(api_key):
     payload = {
         "service": "yugoha",
@@ -101,19 +114,16 @@ def register_discovery(api_key):
         result = supervisor_request("POST", "/discovery", payload)
         log(f"discovery registered: {result}")
 
-        uuid = str(result.get("data", {}).get("uuid") or result.get("uuid") or "").strip()
+        data = result.get("data") or {}
+        uuid = str(data.get("uuid", "") or "").strip()
         if uuid:
             try:
-                # Supervisor can return an existing discovery UUID on later starts.
-                # Explicitly push that UUID into Home Assistant so a deleted config
-                # entry is rediscovered immediately instead of waiting for a new UUID.
-                supervisor_request(
+                pushed = supervisor_request(
                     "POST",
-                    f"/core/api/hassio_push/discovery/{uuid}",
+                    f"/api/hassio_push/discovery/{uuid}",
                     {},
-                    timeout=10,
                 )
-                log(f"discovery pushed to Home Assistant: {uuid}")
+                log(f"discovery pushed to Home Assistant: {pushed}")
             except Exception as exc:
                 log(f"discovery push warning: {exc}")
 
@@ -140,13 +150,13 @@ def main():
         return 1
 
     state = read_json(STATE, {})
-    options = read_json(OPTIONS, {})
-    api_key = str(options.get("api_key", "") or "").strip()
+    api_key = current_api_key()
+
+    if not api_key:
+        log("API key is not ready yet; discovery skipped")
+        return 0
 
     changed = install_integration()
-
-    # API is already listening when bootstrap runs, so config_flow health check
-    # can succeed immediately and create/update the entry.
     register_discovery(api_key)
 
     digest = tree_digest(INTEGRATION_SRC)
