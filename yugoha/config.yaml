@@ -1,5 +1,5 @@
 name: "yuGoHA"
-version: "0.4.0"
+version: "0.4.1"
 slug: "yugoha"
 description: "yuGoHA: локальный сервер уведомлений, WebSocket/FCM и автоматическая установка интеграции Home Assistant"
 url: "https://github.com/yura2507/yugoha-ha"
@@ -26,7 +26,11 @@ map:
   - type: homeassistant_config
     read_only: false
 
-# Доступ к Supervisor нужен для discovery и однократного restart Core
+# Разрешаем Supervisor discovery для нашей интеграции.
+discovery:
+  - yugoha
+
+# Доступ к Supervisor/Core нужен для discovery и однократного restart Core
 # после установки/обновления integration.
 hassio_api: true
 hassio_role: homeassistant
