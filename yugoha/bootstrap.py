@@ -13,7 +13,7 @@ OPTIONS = Path("/data/options.json")
 SUPERVISOR = "http://supervisor"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 
-VERSION = "0.4.3"
+VERSION = "0.4.4"
 
 
 def log(msg):
@@ -100,6 +100,23 @@ def register_discovery(api_key):
     try:
         result = supervisor_request("POST", "/discovery", payload)
         log(f"discovery registered: {result}")
+
+        uuid = str(result.get("data", {}).get("uuid") or result.get("uuid") or "").strip()
+        if uuid:
+            try:
+                # Supervisor can return an existing discovery UUID on later starts.
+                # Explicitly push that UUID into Home Assistant so a deleted config
+                # entry is rediscovered immediately instead of waiting for a new UUID.
+                supervisor_request(
+                    "POST",
+                    f"/core/api/hassio_push/discovery/{uuid}",
+                    {},
+                    timeout=10,
+                )
+                log(f"discovery pushed to Home Assistant: {uuid}")
+            except Exception as exc:
+                log(f"discovery push warning: {exc}")
+
         return True
     except Exception as exc:
         log(f"discovery registration warning: {exc}")
@@ -113,7 +130,6 @@ def restart_core():
         log("Core restart request sent")
         return True
     except Exception as exc:
-        # A timeout is common because Core may already be restarting.
         log(f"Core restart request finished without response: {exc}")
         return True
 
