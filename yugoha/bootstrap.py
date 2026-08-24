@@ -3,8 +3,6 @@ import hashlib
 import json
 import os
 import shutil
-import sys
-import time
 import urllib.request
 from pathlib import Path
 
@@ -15,7 +13,7 @@ OPTIONS = Path("/data/options.json")
 SUPERVISOR = "http://supervisor"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 
-VERSION = "0.4.0"
+VERSION = "0.4.3"
 
 
 def log(msg):
@@ -91,7 +89,6 @@ def install_integration():
 
 
 def register_discovery(api_key):
-    # Supervisor keeps discovery records, so Core will process it after restart.
     payload = {
         "service": "yugoha",
         "config": {
@@ -111,12 +108,14 @@ def register_discovery(api_key):
 
 def restart_core():
     try:
-        log("restarting Home Assistant Core once to load yuGoHA integration")
-        supervisor_request("POST", "/core/restart", {})
+        log("requesting one-time Home Assistant Core restart to load yuGoHA integration")
+        supervisor_request("POST", "/core/restart", {}, timeout=2)
+        log("Core restart request sent")
         return True
     except Exception as exc:
-        log(f"Core restart failed: {exc}")
-        return False
+        # A timeout is common because Core may already be restarting.
+        log(f"Core restart request finished without response: {exc}")
+        return True
 
 
 def main():
@@ -129,9 +128,11 @@ def main():
     api_key = str(options.get("api_key", "") or "").strip()
 
     changed = install_integration()
+
+    # API is already listening when bootstrap runs, so config_flow health check
+    # can succeed immediately and create/update the entry.
     register_discovery(api_key)
 
-    # Restart only once per integration version/digest.
     digest = tree_digest(INTEGRATION_SRC)
     restart_key = f"{VERSION}:{digest}"
 
@@ -139,9 +140,6 @@ def main():
         state["core_restart_for"] = restart_key
         state["integration_version"] = VERSION
         write_json(STATE, state)
-
-        # Give Supervisor/Core a few seconds after app start.
-        time.sleep(8)
         restart_core()
 
     return 0
