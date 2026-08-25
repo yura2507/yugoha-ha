@@ -1,13 +1,30 @@
-# yugoha-ha
+# yuGoHA
 
-Home Assistant App repository for **yuGoHA**.
+Репозиторий Home Assistant App для **yuGoHA 0.4.5**.
 
-Добавить репозиторий в Home Assistant:
+yuGoHA — локальная система уведомлений для Home Assistant и Android. Пользователь устанавливает только Home Assistant App `yuGoHA`; интеграция `yugoha` устанавливается и настраивается автоматически.
+
+## Установка
+
+Добавьте репозиторий в Home Assistant:
 
 `https://github.com/yura2507/yugoha-ha`
 
-Пользователь устанавливает только App `yuGoHA`; bundled Home Assistant integration
-устанавливается и настраивается автоматически.
+Затем установите App **yuGoHA** из магазина приложений.
 
-Автор: **yura2507**  
+> Важно: при первом запуске yuGoHA автоматически устанавливает интеграцию и один раз перезапускает Home Assistant Core.
+
+После установки в автоматизациях доступно действие:
+
+```yaml
+action: yugoha.send
+data:
+  message: "1.info. Проверка yuGoHA"
+```
+
+Новые сообщения доставляются через FCM, а при доступности локальной сети Android использует HTTP/WebSocket для истории, прочтения, удаления и синхронизации. Белый IP не требуется.
+
+## Автор
+
+© 2026 **yura2507**  
 Дзен: https://dzen.ru/yura2507
