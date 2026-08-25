@@ -1,32 +1,32 @@
-# yuGoHA
+# yuGoHA 0.4.5
 
-Сервер уведомлений для Home Assistant и Android yuGoHA.
+Локальный сервер уведомлений для Home Assistant и Android yuGoHA.
 
-## Одна установка
+## Что делает yuGoHA
 
-Пользователь устанавливает только **yuGoHA App** из магазина Home Assistant.
-App сам:
-1. устанавливает/обновляет bundled custom integration `yugoha`;
-2. публикует discovery через Supervisor;
-3. один раз перезапускает Home Assistant Core после изменения integration;
-4. создаёт интеграцию автоматически через `hassio` discovery;
+Пользователь устанавливает только **Home Assistant App yuGoHA**. App автоматически:
+
+1. устанавливает или обновляет custom integration `yugoha`;
+2. регистрирует discovery через Supervisor;
+3. при первой установке интеграции один раз перезапускает Home Assistant Core;
+4. создаёт/обновляет интеграцию;
 5. предоставляет действие `yugoha.send`.
 
-После этого отдельная установка через HACS, SSH или копирование `custom_components`
-не требуется.
+Отдельно устанавливать HACS-интеграцию, копировать `custom_components` или создавать REST-команды не требуется.
 
 ## Архитектура
 
-Home Assistant → `yugoha.send` → yuGoHA App → Firebase пользователя → FCM → Android
+`Home Assistant → yugoha.send → yuGoHA App → Firebase пользователя → FCM → Android`
 
-При доступности локальной сети Android также использует HTTP/WebSocket к yuGoHA App
-для истории, удаления, read-состояния и синхронизации.
+В локальной сети Android дополнительно использует HTTP/WebSocket для истории сообщений, состояния прочтения, удаления и синхронизации.
 
-Белый IP не требуется. При CGNAT новые сообщения приходят через FCM, локальные
-read/delete синхронизируются при возвращении телефона в домашнюю сеть.
+Белый IP не требуется. При сером IP/CGNAT новые сообщения приходят через FCM, а локальные изменения синхронизируются с сервером при следующем доступе к Home Assistant.
+
+## Важно при первой установке
+
+После первого запуска yuGoHA Home Assistant Core автоматически перезапустится один раз. Это необходимо, чтобы Home Assistant загрузил установленную интеграцию `yugoha`.
 
 ## Автор
 
-**yura2507**
-
+© 2026 **yura2507**  
 Дзен: https://dzen.ru/yura2507
