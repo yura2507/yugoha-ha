@@ -6,6 +6,8 @@ import shutil
 import urllib.request
 from pathlib import Path
 
+from version import VERSION
+
 INTEGRATION_SRC = Path("/app/integration/yugoha")
 INTEGRATION_DST = Path("/homeassistant/custom_components/yugoha")
 STATE = Path("/data/bootstrap.json")
@@ -13,9 +15,6 @@ SERVER_STATE = Path("/data/state.json")
 OPTIONS = Path("/data/options.json")
 SUPERVISOR = "http://supervisor"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
-
-VERSION = "0.4.5"
-
 
 def log(msg):
     print(f"[yuGoHA bootstrap] {msg}", flush=True)

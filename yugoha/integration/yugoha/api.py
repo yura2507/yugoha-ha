@@ -17,14 +17,15 @@ class YuGoHAApi:
         with urllib.request.urlopen(req, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    async def send(self, message: str, title: str, priority: int) -> dict:
-        return await asyncio.to_thread(self._send_sync, message, title, priority)
+    async def send(self, message: str, title: str, priority: int, recipient: str = "") -> dict:
+        return await asyncio.to_thread(self._send_sync, message, title, priority, recipient)
 
-    def _send_sync(self, message: str, title: str, priority: int) -> dict:
+    def _send_sync(self, message: str, title: str, priority: int, recipient: str = "") -> dict:
         body = json.dumps({
             "message": message,
             "title": title,
-            "priority": priority
+            "priority": priority,
+            "recipient": recipient,
         }).encode("utf-8")
         req = urllib.request.Request(
             f"{self.url}/api/message",

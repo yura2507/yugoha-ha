@@ -10,6 +10,7 @@ COPY requirements.txt /tmp/requirements.txt
 RUN /opt/yugoha-venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY app.py /app/app.py
+COPY version.py /app/version.py
 COPY bootstrap.py /app/bootstrap.py
 COPY id_migration.py /app/id_migration.py
 COPY integration /app/integration

@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 import sqlite3
 import threading
@@ -11,7 +12,9 @@ from flask_sock import Sock
 import firebase_admin
 from firebase_admin import credentials, messaging
 
-DATA_DIR = Path("/data")
+from version import VERSION
+
+DATA_DIR = Path(os.environ.get("YUGOHA_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "yugoha.sqlite"
 SERVICE_ACCOUNT_PATH = DATA_DIR / "service-account.json"
 STATE_PATH = DATA_DIR / "state.json"
@@ -54,22 +57,36 @@ def save_state(state):
 
 
 def load_state():
+    state = None
     if STATE_PATH.exists():
         try:
             data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
             if data.get("pair_code") and data.get("api_key"):
-                return data
+                state = data
         except Exception:
             pass
 
     options = load_options()
     configured_api_key = str(options.get("api_key", "") or "").strip()
 
-    state = {
-        "pair_code": f"{secrets.randbelow(1_000_000):06d}",
-        "api_key": configured_api_key or secrets.token_urlsafe(32),
-    }
-    save_state(state)
+    if state is None:
+        state = {
+            "pair_code": f"{secrets.randbelow(1_000_000):06d}",
+            "api_key": configured_api_key or secrets.token_urlsafe(32),
+        }
+
+    changed = False
+    if not state.get("server_id"):
+        state["server_id"] = secrets.token_hex(16)
+        changed = True
+    if not state.get("server_name"):
+        state["server_name"] = str(
+            options.get("server_name", "Home Assistant") or "Home Assistant"
+        ).strip()[:100]
+        changed = True
+
+    if changed or not STATE_PATH.exists():
+        save_state(state)
     return state
 
 
@@ -110,6 +127,7 @@ def init_db():
                 name TEXT NOT NULL,
                 token TEXT NOT NULL,
                 secret TEXT NOT NULL DEFAULT '',
+                recipient TEXT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -124,6 +142,8 @@ def init_db():
             conn.execute(
                 "ALTER TABLE devices ADD COLUMN secret TEXT NOT NULL DEFAULT ''"
             )
+        if "recipient" not in device_cols:
+            conn.execute("ALTER TABLE devices ADD COLUMN recipient TEXT NULL")
 
         # Backfill identity/security for devices created by v0.1/v0.2.
         for row in conn.execute(
@@ -314,19 +334,40 @@ def message_payload(row):
     }
 
 
-def send_fcm_new(row):
-    if not ensure_firebase():
-        raise RuntimeError("service-account.json не загружен")
+def recipient_value(value):
+    value = str(value or "").strip()
+    return value[:100] or None
 
+
+def server_fields():
+    return {
+        "server_id": str(STATE["server_id"]),
+        "server_name": str(STATE["server_name"]),
+    }
+
+
+def send_fcm_new(row, recipient=None):
     payload = message_payload(row)
+    recipient = recipient_value(recipient)
 
     with db() as conn:
-        devices = conn.execute(
-            "SELECT id, name, token FROM devices ORDER BY id"
-        ).fetchall()
+        if recipient is None:
+            devices = conn.execute(
+                "SELECT id, name, token FROM devices ORDER BY id"
+            ).fetchall()
+        else:
+            devices = conn.execute(
+                "SELECT id, name, token FROM devices WHERE recipient=? ORDER BY id",
+                (recipient,),
+            ).fetchall()
 
     if not devices:
-        raise RuntimeError("Нет зарегистрированных устройств")
+        if recipient is None:
+            raise RuntimeError("Нет зарегистрированных устройств")
+        return 0, []
+
+    if not ensure_firebase():
+        raise RuntimeError("service-account.json не загружен")
 
     ok = 0
     errors = []
@@ -344,6 +385,7 @@ def send_fcm_new(row):
                     "updated_at": payload["updated_at"],
                     "priority": str(payload["priority"]),
                     "version": str(payload["version"]),
+                    **server_fields(),
                 },
                 android=messaging.AndroidConfig(
                     priority="high",
@@ -386,7 +428,7 @@ def send_fcm_delete(message_id, version):
             pass
 
 
-def ws_broadcast(event):
+def ws_broadcast(event, device_ids=None):
     raw = json.dumps(
         event,
         ensure_ascii=False,
@@ -396,6 +438,8 @@ def ws_broadcast(event):
 
     with ws_lock:
         for device_id, sockets in list(ws_clients.items()):
+            if device_ids is not None and device_id not in device_ids:
+                continue
             for ws in list(sockets):
                 try:
                     ws.send(raw)
@@ -410,7 +454,7 @@ def ws_broadcast(event):
                     ws_clients.pop(device_id, None)
 
 
-def create_message(title, body, priority):
+def create_message(title, body, priority, recipient=None):
     now = utc_now()
 
     with db() as conn:
@@ -440,11 +484,23 @@ def create_message(title, body, priority):
             (message_id,),
         ).fetchone()
 
+    recipient = recipient_value(recipient)
+    target_ids = None
+    if recipient is not None:
+        with db() as conn:
+            target_ids = {
+                int(item["id"])
+                for item in conn.execute(
+                    "SELECT id FROM devices WHERE recipient=?", (recipient,)
+                ).fetchall()
+            }
+
     ws_broadcast({
         "type": "message",
         "id": message_id,
         "version": version,
-    })
+        **server_fields(),
+    }, target_ids)
 
     return row
 
@@ -634,7 +690,7 @@ button.secondary{background:#667085}button.danger{background:#b42318}
 </style>
 </head>
 <body><div class="wrap">
-<h1>yuGoHA Server <span class="pill">v0.4.0</span></h1>
+<h1>yuGoHA Server <span class="pill">v{{app_version}}</span></h1>
 <div class="muted">HTTP/WebSocket локально + FCM для доставки во сне и за CGNAT</div>
 
 {% if status %}<div class="card"><b>{{status}}</b></div>{% endif %}
@@ -671,6 +727,14 @@ button.secondary{background:#667085}button.danger{background:#b42318}
 <button type="submit" class="secondary">ПЕРЕИМЕНОВАТЬ</button>
 </div>
 </form>
+<form action="./set_recipient" method="post">
+<input type="hidden" name="device_id" value="{{d["id"]}}">
+<div class="row">
+<input name="recipient" value="{{d["recipient"] or ''}}" maxlength="100" placeholder="Получатель, например yura">
+<button type="submit" class="secondary">СОХРАНИТЬ ПОЛУЧАТЕЛЯ</button>
+</div>
+</form>
+<div class="small muted">Пустое поле означает получение общих сообщений.</div>
 <div class="small muted">Последняя регистрация: {{d["updated_at"]}}</div>
 <form action="./test_device" method="post">
 <input type="hidden" name="device_id" value="{{d["id"]}}">
@@ -736,7 +800,7 @@ def index():
 
     with db() as conn:
         devices = conn.execute(
-            "SELECT id, name, updated_at FROM devices ORDER BY id"
+            "SELECT id, name, recipient, updated_at FROM devices ORDER BY id"
         ).fetchall()
         message_count = conn.execute(
             "SELECT COUNT(*) AS c FROM messages"
@@ -769,6 +833,7 @@ def index():
 
     return render_template_string(
         INDEX_HTML,
+        app_version=VERSION,
         status=status,
         firebase_project=firebase_project_id(),
         pair_code=STATE["pair_code"],
@@ -849,6 +914,30 @@ def rename_device():
 
     return ingress_redirect(
         "Устройство переименовано"
+        if cur.rowcount
+        else "Устройство не найдено"
+    )
+
+
+@app.post("/set_recipient")
+def set_recipient():
+    try:
+        device_id = int(request.form.get("device_id", "0"))
+    except Exception:
+        device_id = 0
+
+    recipient = recipient_value(request.form.get("recipient"))
+    if device_id <= 0:
+        return ingress_redirect("Некорректные данные устройства")
+
+    with db() as conn:
+        cur = conn.execute(
+            "UPDATE devices SET recipient=? WHERE id=?",
+            (recipient, device_id),
+        )
+
+    return ingress_redirect(
+        "Получатель сохранён"
         if cur.rowcount
         else "Устройство не найдено"
     )
@@ -968,6 +1057,7 @@ def register_device():
         device_id=device_id,
         device_secret=secret,
         firebase_project=firebase_project_id(),
+        **server_fields(),
     )
 
 
@@ -1047,11 +1137,12 @@ def health():
 
     return jsonify(
         ok=True,
-        version="0.4.0",
+        version=VERSION,
         firebase_project=firebase_project_id(),
         firebase_ready=SERVICE_ACCOUNT_PATH.exists(),
         devices=devices,
         sync_version=version,
+        **server_fields(),
     )
 
 
@@ -1065,6 +1156,7 @@ def api_message():
 
     payload = request.get_json(silent=True) or {}
     body = str(payload.get("message", "")).strip()
+    recipient = recipient_value(payload.get("recipient"))
     title = str(
         payload.get(
             "title",
@@ -1089,12 +1181,13 @@ def api_message():
         title,
         body,
         priority,
+        recipient,
     )
 
     message_id = int(row["id"])
 
     try:
-        ok_count, errors = send_fcm_new(row)
+        ok_count, errors = send_fcm_new(row, recipient)
 
         with db() as conn:
             conn.execute(
@@ -1115,6 +1208,7 @@ def api_message():
             id=message_id,
             version=int(row["version"]),
             delivered=ok_count,
+            recipient=recipient,
             errors=errors,
         )
     except Exception as exc:
@@ -1308,7 +1402,8 @@ def websocket(ws):
             json.dumps({
                 "type": "hello",
                 "server": "yuGoHA",
-                "version": "0.4.0",
+                "version": VERSION,
+                **server_fields(),
             })
         )
 

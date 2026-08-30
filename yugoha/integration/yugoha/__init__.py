@@ -10,6 +10,7 @@ SEND_SCHEMA = vol.Schema({
     vol.Required("message"): cv.string,
     vol.Optional("title", default="Home Assistant"): cv.string,
     vol.Optional("priority", default=5): vol.All(vol.Coerce(int), vol.Range(min=0, max=10)),
+    vol.Optional("recipient", default=""): cv.string,
 })
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -17,7 +18,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = api
 
     async def handle_send(call: ServiceCall) -> None:
-        await api.send(call.data["message"], call.data["title"], call.data["priority"])
+        await api.send(
+            call.data["message"],
+            call.data["title"],
+            call.data["priority"],
+            call.data["recipient"],
+        )
 
     if not hass.services.has_service(DOMAIN, SERVICE_SEND):
         hass.services.async_register(DOMAIN, SERVICE_SEND, handle_send, schema=SEND_SCHEMA)
