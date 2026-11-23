@@ -3,6 +3,7 @@ import os
 import secrets
 import sqlite3
 import threading
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -79,10 +80,10 @@ def load_state():
     if not state.get("server_id"):
         state["server_id"] = secrets.token_hex(16)
         changed = True
-    if not state.get("server_name"):
-        state["server_name"] = str(
-            options.get("server_name", "Home Assistant") or "Home Assistant"
-        ).strip()[:100]
+    configured_name = str(options.get("server_name", "") or "").strip()[:100]
+    server_name = configured_name or str(state.get("server_name") or "").strip()[:100] or "Home Assistant"
+    if state.get("server_name") != server_name:
+        state["server_name"] = server_name
         changed = True
 
     if changed or not STATE_PATH.exists():
@@ -178,11 +179,25 @@ def init_db():
                 deleted INTEGER NOT NULL DEFAULT 0,
                 version INTEGER NOT NULL DEFAULT 0,
                 fcm_ok INTEGER NOT NULL DEFAULT 0,
-                fcm_error TEXT NOT NULL DEFAULT ''
+                fcm_error TEXT NOT NULL DEFAULT '',
+                audience_restricted INTEGER NOT NULL DEFAULT 0
             )
         """)
 
         message_cols = _columns(conn, "messages")
+        # Older versions did not record recipients. Preserve that shared history;
+        # every newly targeted message gets an immutable device audience below.
+        if "audience_restricted" not in message_cols:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN audience_restricted INTEGER NOT NULL DEFAULT 0"
+            )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS message_devices (
+                message_id INTEGER NOT NULL,
+                device_id INTEGER NOT NULL,
+                PRIMARY KEY(message_id, device_id)
+            )
+        """)
         if "updated_at" not in message_cols:
             conn.execute(
                 "ALTER TABLE messages ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"
@@ -194,6 +209,14 @@ def init_db():
         if "version" not in message_cols:
             conn.execute(
                 "ALTER TABLE messages ADD COLUMN version INTEGER NOT NULL DEFAULT 0"
+            )
+        if "fcm_ok" not in message_cols:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN fcm_ok INTEGER NOT NULL DEFAULT 0"
+            )
+        if "fcm_error" not in message_cols:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN fcm_error TEXT NOT NULL DEFAULT ''"
             )
 
         # Old rows become valid initial sync history.
@@ -346,23 +369,43 @@ def server_fields():
     }
 
 
+def message_device_ids(conn, message_id):
+    row = conn.execute(
+        "SELECT audience_restricted FROM messages WHERE id=?", (message_id,)
+    ).fetchone()
+    if row is None:
+        return set()
+    if not row["audience_restricted"]:
+        return None  # Broadcasts remain available to newly paired phones.
+    return {
+        int(item["device_id"])
+        for item in conn.execute(
+            "SELECT device_id FROM message_devices WHERE message_id=?", (message_id,)
+        )
+    }
+
+
+def sync_ids_authorized(conn, device_id, ids):
+    for message_id in set(ids):
+        audience = message_device_ids(conn, message_id)
+        # Preserve idempotent acknowledgement of unknown IDs for old clients.
+        exists = conn.execute("SELECT 1 FROM messages WHERE id=?", (message_id,)).fetchone()
+        if exists and audience is not None and device_id not in audience:
+            return False
+    return True
+
+
 def send_fcm_new(row, recipient=None):
     payload = message_payload(row)
-    recipient = recipient_value(recipient)
 
     with db() as conn:
-        if recipient is None:
-            devices = conn.execute(
-                "SELECT id, name, token FROM devices ORDER BY id"
-            ).fetchall()
-        else:
-            devices = conn.execute(
-                "SELECT id, name, token FROM devices WHERE recipient=? ORDER BY id",
-                (recipient,),
-            ).fetchall()
+        audience = message_device_ids(conn, int(row["id"]))
+        devices = conn.execute("SELECT id, name, token FROM devices ORDER BY id").fetchall()
+        if audience is not None:
+            devices = [device for device in devices if int(device["id"]) in audience]
 
     if not devices:
-        if recipient is None:
+        if audience is None:
             raise RuntimeError("Нет зарегистрированных устройств")
         return 0, []
 
@@ -405,9 +448,12 @@ def send_fcm_delete(message_id, version):
         return
 
     with db() as conn:
+        audience = message_device_ids(conn, message_id)
         devices = conn.execute(
-            "SELECT name, token FROM devices ORDER BY id"
+            "SELECT id, name, token FROM devices ORDER BY id"
         ).fetchall()
+        if audience is not None:
+            devices = [device for device in devices if int(device["id"]) in audience]
 
     for device in devices:
         try:
@@ -417,6 +463,7 @@ def send_fcm_delete(message_id, version):
                     "type": "yugoha_delete",
                     "id": str(message_id),
                     "version": str(version),
+                    **server_fields(),
                 },
                 android=messaging.AndroidConfig(
                     priority="high",
@@ -454,19 +501,34 @@ def ws_broadcast(event, device_ids=None):
                     ws_clients.pop(device_id, None)
 
 
-def create_message(title, body, priority, recipient=None):
+def create_message(title, body, priority, recipient=None, target_device_ids=None):
     now = utc_now()
+    recipient = recipient_value(recipient)
 
     with db() as conn:
+        target_ids = None
+        if target_device_ids is not None:
+            requested_ids = {int(x) for x in target_device_ids}
+            target_ids = {
+                int(item["id"]) for item in conn.execute("SELECT id FROM devices")
+                if int(item["id"]) in requested_ids
+            }
+        elif recipient is not None:
+            target_ids = {
+                int(item["id"])
+                for item in conn.execute(
+                    "SELECT id FROM devices WHERE recipient=?", (recipient,)
+                )
+            }
         version = next_version(conn)
         cur = conn.execute(
             """
             INSERT INTO messages(
                 title, message, priority,
                 created_at, updated_at,
-                deleted, version
+                deleted, version, audience_restricted
             )
-            VALUES(?,?,?,?,?,0,?)
+            VALUES(?,?,?,?,?,0,?,?)
             """,
             (
                 title,
@@ -475,25 +537,20 @@ def create_message(title, body, priority, recipient=None):
                 now,
                 now,
                 version,
+                int(target_ids is not None),
             ),
         )
         message_id = int(cur.lastrowid)
+        if target_ids is not None:
+            conn.executemany(
+                "INSERT INTO message_devices(message_id, device_id) VALUES(?,?)",
+                [(message_id, device_id) for device_id in sorted(target_ids)],
+            )
 
         row = conn.execute(
             "SELECT * FROM messages WHERE id=?",
             (message_id,),
         ).fetchone()
-
-    recipient = recipient_value(recipient)
-    target_ids = None
-    if recipient is not None:
-        with db() as conn:
-            target_ids = {
-                int(item["id"])
-                for item in conn.execute(
-                    "SELECT id FROM devices WHERE recipient=?", (recipient,)
-                ).fetchall()
-            }
 
     ws_broadcast({
         "type": "message",
@@ -505,10 +562,10 @@ def create_message(title, body, priority, recipient=None):
     return row
 
 
-def delete_messages(ids):
+def delete_messages(ids, connection=None):
     changed = []
 
-    with db() as conn:
+    with (db() if connection is None else nullcontext(connection)) as conn:
         for message_id in sorted(set(int(x) for x in ids)):
             row = conn.execute(
                 "SELECT id, deleted FROM messages WHERE id=?",
@@ -532,23 +589,29 @@ def delete_messages(ids):
 
             changed.append((message_id, version))
 
+    if connection is None:
+        broadcast_deletes(changed)
+    return changed
+
+
+def broadcast_deletes(changed):
     for message_id, version in changed:
+        with db() as conn:
+            audience = message_device_ids(conn, message_id)
         ws_broadcast({
             "type": "delete",
             "id": message_id,
             "version": version,
-        })
+            **server_fields(),
+        }, audience)
         send_fcm_delete(message_id, version)
 
-    return changed
-
-
-def apply_reads(device_id, ids):
+def apply_reads(device_id, ids, connection=None):
     if not ids:
         return 0
 
     count = 0
-    with db() as conn:
+    with (db() if connection is None else nullcontext(connection)) as conn:
         for message_id in sorted(set(int(x) for x in ids)):
             exists = conn.execute(
                 "SELECT id FROM messages WHERE id=?",
@@ -600,6 +663,10 @@ def get_changes(device_id, after_version, limit=500):
     limit = max(1, min(int(limit), 1000))
 
     with db() as conn:
+        # SELECT does not start a transaction in sqlite3's legacy transaction
+        # mode. Keep rows and cursor in one snapshot so a concurrent message
+        # cannot advance the cursor past a row missing from this response.
+        conn.execute("BEGIN")
         rows = conn.execute(
             """
             SELECT
@@ -618,8 +685,11 @@ def get_changes(device_id, after_version, limit=500):
               ON r.device_id=?
              AND r.message_id=m.id
             WHERE
-                m.version > ?
-                OR COALESCE(r.version, 0) > ?
+                (m.version > ? OR COALESCE(r.version, 0) > ?)
+                AND (m.audience_restricted=0 OR EXISTS (
+                    SELECT 1 FROM message_devices a
+                    WHERE a.message_id=m.id AND a.device_id=?
+                ))
             ORDER BY
                 MAX(m.version, COALESCE(r.version, 0)) ASC,
                 m.id ASC
@@ -629,6 +699,7 @@ def get_changes(device_id, after_version, limit=500):
                 device_id,
                 after_version,
                 after_version,
+                device_id,
                 limit + 1,
             ),
         ).fetchall()
@@ -1078,7 +1149,7 @@ def update_device_token():
             (token, utc_now(), int(device["id"])),
         )
 
-    return jsonify(ok=True)
+    return jsonify(ok=True, **server_fields())
 
 
 @app.post("/api/sync")
@@ -1109,8 +1180,16 @@ def sync():
             error="Некорректные id",
         ), 400
 
-    apply_reads(int(device["id"]), read_ids)
-    deleted = delete_messages(delete_ids)
+    # Lock writes before authorization: an unknown ID must not become a newly
+    # created private message between authorization and applying this batch.
+    # Read/delete changes commit together; delivery happens only after commit.
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not sync_ids_authorized(conn, int(device["id"]), read_ids + delete_ids):
+            return jsonify(ok=False, error="Message is not available to this device"), 403
+        apply_reads(int(device["id"]), read_ids, conn)
+        deleted = delete_messages(delete_ids, conn)
+    broadcast_deletes(deleted)
 
     result = get_changes(
         int(device["id"]),
@@ -1124,6 +1203,7 @@ def sync():
         ack_delete=delete_ids,
         deleted_now=[x[0] for x in deleted],
         **result,
+        **server_fields(),
     )
 
 
@@ -1263,6 +1343,7 @@ def test_device():
         "yuGoHA Server",
         body,
         5,
+        target_device_ids=[device_id],
     )
 
     try:
@@ -1282,6 +1363,7 @@ def test_device():
                 "updated_at": str(row["updated_at"]),
                 "priority": str(row["priority"]),
                 "version": str(row["version"]),
+                **server_fields(),
             },
             android=messaging.AndroidConfig(
                 priority="high",

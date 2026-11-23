@@ -39,7 +39,7 @@ done
 # When integration files changed, bootstrap asks Core to restart once.
 /opt/yugoha-venv/bin/python /app/bootstrap.py || true
 
-# Keep message ids unique across server reinstalls/moves.
-/opt/yugoha-venv/bin/python /app/id_migration.py || true
+# Message IDs remain stable for already paired Android clients. Each HA has a
+# persistent server_id; multi-home clients namespace remote IDs by that server.
 
 wait "$SERVER_PID"
